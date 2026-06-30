@@ -1,0 +1,29 @@
+# build outputs
+.build/
+build/
+*.xcodeproj
+*.log
+captures/
+
+# APK the user drops in (proprietary, large) — never commit
+*.apk
+
+# Xiaomi proprietary native lib — user extracts it from the APK
+resources/libxm_bluetooth.so
+
+# compiled auth helper is a build artifact (built from auth_helper.c by build.sh)
+resources/auth_helper
+
+# icon working directory (AppIcon.icns itself IS committed)
+resources/RedmiBudsControl.iconset
+
+# vendored unicorn static lib is ~24MB; use `brew install unicorn` instead.
+# (Headers under Vendor/unicorn/include/ are committed.)
+Vendor/unicorn/lib/
+
+# reverse-engineering workspace
+tools/re/
+
+.swiftpm/
+Package.resolved
+.DS_Store
