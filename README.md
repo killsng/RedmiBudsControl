@@ -60,7 +60,7 @@ Full protocol reference: [`docs/PROTOCOL.md`](docs/PROTOCOL.md) and
 ## Build & run
 
 ```bash
-git clone <this-repo> && cd RedmiBudsControl
+git clone [<https://github.com/killsng/RedmiBudsControl>] && cd RedmiBudsControl
 
 # 1) One-time: extract the auth lib from the official "Xiaomi Earbuds" APK
 #    (package com.mi.earphone — from APKPure / APKMirror).
