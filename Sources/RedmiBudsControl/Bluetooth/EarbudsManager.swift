@@ -27,6 +27,14 @@ final class EarbudsManager: NSObject, ObservableObject {
 
     /// True when we have at least read the current state from the buds.
     @Published private(set) var protocolReady = false
+    /// True when cached state (battery/ANC/EQ) is available to show, even if
+    /// we've gone idle (transient mode) and the channel is closed.
+    @Published private(set) var stateKnown = false
+    /// Transient mode: auto-close the MMA channel shortly after each op so the
+    /// buds' A2DP/HFP audio profiles come back. Persisted.
+    @Published var transientMode: Bool {
+        didSet { UserDefaults.standard.set(transientMode, forKey: "transientMode") }
+    }
 
     let logger = CaptureLogger()
 
@@ -34,8 +42,15 @@ final class EarbudsManager: NSObject, ObservableObject {
     private let parser = MMAParser()
     private var pending: [UInt8: (Result<MMARawPacket, Error>) -> Void] = [:]
     private var nextSN: UInt8 = UInt8.random(in: 0...UInt8.max)
+    private var pendingOp: (() -> Void)?
+    private var idleWork: DispatchWorkItem?
 
     private let nameKeywords = ["Redmi Buds", "Xiaomi Buds", "Mi Buds", "RedmiBuds", "Buds"]
+
+    override init() {
+        self.transientMode = UserDefaults.standard.object(forKey: "transientMode") as? Bool ?? true
+        super.init()
+    }
 
     // MARK: - Discovery
 
@@ -75,6 +90,7 @@ final class EarbudsManager: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        idleWork?.cancel()
         transport?.disconnect()
         transport = nil
         selectedAddress = nil
@@ -82,7 +98,9 @@ final class EarbudsManager: NSObject, ObservableObject {
         authed = false
         authRequired = false
         protocolReady = false
+        stateKnown = false
         pending.removeAll()
+        pendingOp = nil
         battery = BatteryState()
     }
 
@@ -217,10 +235,11 @@ final class EarbudsManager: NSObject, ObservableObject {
         transport?.confirmChannel()
         connectRetries = 0
         protocolReady = true
+        stateKnown = true
         authed = true
         linkState = .authed
         logger.info("Protocol ready (no auth needed)")
-        refreshAll()
+        onAuthed()
     }
 
     // MARK: - Auth handshake
@@ -276,14 +295,62 @@ final class EarbudsManager: NSObject, ObservableObject {
             case .success(let resp) where resp.data == [0x01]:
                 self.authed = true
                 self.protocolReady = true
+                self.stateKnown = true
                 self.linkState = .authed
                 self.logger.info("Auth complete")
-                self.refreshAll()
+                self.onAuthed()
             default:
                 self.logger.error("Auth status unexpected")
                 self.linkState = .failed
             }
         }
+    }
+
+    // MARK: - Transient mode (audio coexistence)
+
+    /// Called right after the channel is authenticated and usable. Runs any op
+    /// that was queued while (re)connecting, refreshes state, and (in transient
+    /// mode) schedules closing the channel so the buds' audio profiles return.
+    private func onAuthed() {
+        refreshAll()
+        let op = pendingOp
+        pendingOp = nil
+        op?()
+        armIdle()
+    }
+
+    /// Ensure we are connected+authed, run `op`, then (transient) go idle.
+    private func transact(_ op: @escaping () -> Void) {
+        if protocolReady {                 // already connected
+            op()
+            armIdle()
+        } else if let addr = selectedAddress,
+                  let dev = paired.first(where: { $0.address == addr }) {
+            pendingOp = op                 // run once authed (onAuthed)
+            startConnect(dev)
+        }
+    }
+
+    private func armIdle() {
+        idleWork?.cancel()
+        guard transientMode else { return }
+        let w = DispatchWorkItem { [weak self] in self?.goIdle() }
+        idleWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: w)
+    }
+
+    /// Close the MMA channel but keep cached state + stateKnown, so the buds
+    /// re-register their A2DP/HFP audio profiles with macOS.
+    private func goIdle() {
+        guard transport != nil else { return }
+        logger.info("Idle → closing MMA channel so audio can resume")
+        idleWork?.cancel()
+        transport?.disconnect()
+        transport = nil
+        protocolReady = false
+        authed = false
+        linkState = .idle
+        pending.removeAll()
     }
 
     // MARK: - High-level ops
@@ -292,6 +359,11 @@ final class EarbudsManager: NSObject, ObservableObject {
         getBattery()
         getANC()
         getEQ()
+    }
+
+    /// UI "Refresh": (re)connect transiently, read fresh state, go idle.
+    func refresh() {
+        transact { self.refreshAll() }
     }
 
     func getBattery() {
@@ -310,12 +382,16 @@ final class EarbudsManager: NSObject, ObservableObject {
     }
 
     func setANC(_ mode: ANCMode) {
+        ancMode = mode // optimistic; the bud's notify corrects it
+        transact { self.sendSetANC(mode) }
+    }
+
+    private func sendSetANC(_ mode: ANCMode) {
         let value: [UInt8] = [mode.wireByte, 0x00]
         request(opcode: MMA.Op.setDeviceConfig.rawValue,
                 data: MMA.packSetConfig(MMA.Config.noiseCancellationMode.rawValue, value: value)) { [weak self] resp in
             guard let self else { return }
             if case .success(let r) = resp, r.status == 0 {
-                self.ancMode = mode
                 self.logger.info("ANC set -> \(mode.label)")
             } else {
                 self.logger.error("ANC set failed (auth required?)")
@@ -333,12 +409,16 @@ final class EarbudsManager: NSObject, ObservableObject {
     }
 
     func setEQ(_ mode: SoundMode) {
+        soundMode = mode // optimistic
+        transact { self.sendSetEQ(mode) }
+    }
+
+    private func sendSetEQ(_ mode: SoundMode) {
         let value: [UInt8] = [mode.wireByte, 0x00]
         request(opcode: MMA.Op.setDeviceConfig.rawValue,
                 data: MMA.packSetConfig(MMA.Config.equalizerMode.rawValue, value: value)) { [weak self] resp in
             guard let self else { return }
             if case .success(let r) = resp, r.status == 0 {
-                self.soundMode = mode
                 self.logger.info("EQ set -> \(mode.label)")
             } else {
                 self.logger.error("EQ set failed (auth required?)")

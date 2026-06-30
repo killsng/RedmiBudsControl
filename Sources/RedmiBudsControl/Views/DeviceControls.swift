@@ -28,26 +28,27 @@ struct DeviceControls: View {
                 ForEach(ANCMode.allCases) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
-            .disabled(!manager.protocolReady)
+            .disabled(!manager.stateKnown)
 
             Text("Equalizer").font(.caption).foregroundStyle(.secondary)
             Picker("EQ", selection: eqBinding) {
                 ForEach(SoundMode.allCases) { Text($0.label).tag($0) }
             }
-            .disabled(!manager.protocolReady)
+            .disabled(!manager.stateKnown)
 
-            if manager.authRequired && !manager.authed {
+            if manager.linkState == .connecting {
                 Label {
-                    Text("Auth required for writes — crypto not yet implemented (see log).")
-                        .font(.caption2).foregroundStyle(.orange)
-                } icon: { Image(systemName: "exclamationmark.triangle.fill").font(.caption2) }
-            } else if !manager.protocolReady {
-                Label {
-                    Text("Negotiating with earbuds…").font(.caption2).foregroundStyle(.secondary)
+                    Text("Connecting to earbuds…").font(.caption2).foregroundStyle(.secondary)
                 } icon: { ProgressView().controlSize(.mini) }
+            } else if manager.transientMode && !manager.protocolReady && manager.stateKnown {
+                Label {
+                    Text("Audio-friendly mode: reconnects briefly on each change.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } icon: { Image(systemName: "waveform.badge.minus").font(.caption2) }
             }
 
             HStack {
+                Button("Refresh") { manager.refresh() }
                 Button("Packet log") { openWindow(id: "packet-log") }
                 Spacer()
                 Button("Disconnect", role: .destructive) { manager.disconnect() }

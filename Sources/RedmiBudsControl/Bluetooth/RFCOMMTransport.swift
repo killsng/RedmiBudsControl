@@ -42,9 +42,10 @@ final class RFCOMMTransport: NSObject {
             logger?.info("Transport: base connection down, opening…")
             _ = device.openConnection()
         }
-        // Give the buds a moment to bring up audio profiles and register the
-        // MMA service in SDP (it appears only on an active connection).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        // Brief settle for the buds to bring up profiles / register MMA; the
+        // direct channel-24 probe (in handleSDPComplete) covers the case where
+        // MMA isn't advertised. Kept short so transient reconnects are fast.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.querySDP()
         }
     }

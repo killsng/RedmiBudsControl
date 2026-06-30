@@ -12,6 +12,13 @@ struct SettingsView: View {
                 Toggle("Launch at Login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, on in toggleLogin(on) }
             }
+            Section("Audio") {
+                Toggle("Audio-friendly mode", isOn: $manager.transientMode)
+                Text(manager.transientMode
+                     ? "Closes the control channel between actions so sound/mic keep working (brief drop on each change)."
+                     : "Holds the connection open — ANC/EQ respond instantly, but earbuds may drop from audio output.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             Section("Device") {
                 Button("Refresh battery / ANC / EQ") { manager.refreshAll() }
                 if !manager.protocolReady {

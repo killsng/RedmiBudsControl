@@ -9,7 +9,7 @@ struct MenuContent: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             Divider()
-            if manager.linkState == .connected || manager.linkState == .authed {
+            if manager.linkState == .connected || manager.linkState == .authed || manager.stateKnown {
                 DeviceControls(manager: manager)
             } else {
                 DevicePicker(manager: manager)
